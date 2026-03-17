@@ -26,6 +26,7 @@
     "tabs": [
       {
         "tab": "Guides",
+        "hidden": true,
         "groups": [
           {
             "group": "Getting started",
@@ -66,6 +67,7 @@
         "groups": [
           {
             "group": "API documentation",
+            "hidden": true,
             "pages": [
               "api-reference/introduction"
             ]
