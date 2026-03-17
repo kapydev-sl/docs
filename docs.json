@@ -118,5 +118,11 @@
       "github": "https://github.com/mintlify",
       "linkedin": "https://linkedin.com/company/mintlify"
     }
+  },
+  "api": {
+    "playground": {
+      "display": "interactive"
+    },
+    "openapi": "/openapi.yml"
   }
 }

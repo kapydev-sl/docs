@@ -1,0 +1,456 @@
+openapi: 3.1.0
+info:
+  title: Kapy Engine API
+  version: 1.0.0
+
+servers:
+  - url: https://engine.kapy.dev/v1
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    PlanSummary:
+      type: object
+      required: [id, owner_user_id, created_at, input_question, input_kind, status, last_execution_id, last_execution_at]
+      properties:
+        id:
+          type: integer
+        owner_user_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        input_question:
+          type: string
+        input_kind:
+          type: string
+          enum: [linear, decision-tree, auto]
+        status:
+          type: string
+          enum: [queued, working, success, error]
+        last_execution_id:
+          type: integer
+          nullable: true
+        last_execution_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Plan:
+      allOf:
+        - $ref: '#/components/schemas/PlanSummary'
+        - type: object
+          required: [output_schema]
+          properties:
+            output_schema:
+              type: object
+              nullable: true
+              description: Serialized research graph produced by the worker. Null while status is queued or working.
+
+    ExecutionOutput:
+      type: array
+      description: Array of resolved paths through the research graph. Each path is an ordered sequence of nodes and edges leading to a conclusion.
+      items:
+        type: array
+        items:
+          oneOf:
+            - $ref: '#/components/schemas/RunnerNode'
+            - $ref: '#/components/schemas/RunnerEdge'
+
+    RunnerNode:
+      type: object
+      required: [id, node_context]
+      properties:
+        id:
+          type: string
+        node_context:
+          type: string
+        explanation:
+          $ref: '#/components/schemas/NodeExplanation'
+
+    RunnerEdge:
+      type: object
+      required: [id, decision_context, decision_condition]
+      properties:
+        id:
+          type: string
+        decision_context:
+          type: string
+        decision_condition:
+          type: string
+        explanation:
+          $ref: '#/components/schemas/EdgeExplanation'
+
+    NodeExplanation:
+      type: object
+      required: [title, description]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        chart:
+          type: object
+          nullable: true
+          description: Resolved chart data (histogram, timeserie, bars, donut, radar, or pair).
+        metrics:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label:
+                type: string
+              value: {}
+
+    EdgeExplanation:
+      type: object
+      required: [description, longDescription]
+      properties:
+        description:
+          type: string
+        longDescription:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /plans:
+    get:
+      summary: List research plans
+      description: Returns all research plans for the authenticated workspace, ordered by creation date descending. Each plan includes the ID and date of its most recent execution.
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: Filter plans (and their last execution) by owner user ID.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of plans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PlanSummary'
+        '401':
+          description: Missing or malformed Authorization header
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Token not found in any workspace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /plan:
+    post:
+      summary: Create a research plan
+      description: Enqueues a new research plan for processing by the worker.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, kind, context, userId]
+              properties:
+                question:
+                  type: string
+                  description: The research question.
+                kind:
+                  type: string
+                  enum: [linear, decision-tree, auto]
+                  description: Research strategy. Use `auto` to let the engine classify the question.
+                context:
+                  type: string
+                  description: Additional context for the research (e.g. metric filters, date range hints).
+                userId:
+                  type: string
+                  description: ID of the user initiating the research.
+      responses:
+        '201':
+          description: Plan enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plan_id]
+                properties:
+                  plan_id:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /plan/{id}:
+    get:
+      summary: Get a research plan
+      description: Returns plan details including the output schema once the worker has completed it.
+      parameters:
+        - $ref: '#/components/parameters/planId'
+      responses:
+        '200':
+          description: Plan detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete a research plan
+      description: Deletes the plan and all its nodes and executions (cascade).
+      parameters:
+        - $ref: '#/components/parameters/planId'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted:
+                    type: boolean
+                    example: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plan/{id}/execution:
+    post:
+      summary: Execute a research plan
+      description: |
+        Runs the research plan immediately against the provided input.
+
+        - If all nodes and edges in the result have an `explanation`, status is `success`.
+        - If some are missing, status is `pending` (augmentation worker hasn't finished yet); the output is still saved and returned.
+        - If execution fails (e.g. plan schema not ready), status is `error`.
+      parameters:
+        - $ref: '#/components/parameters/planId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, input]
+              properties:
+                userId:
+                  type: string
+                input:
+                  type: object
+                  description: Interpreter input (e.g. date range, tenant filters). Shape is domain-specific.
+      responses:
+        '201':
+          description: Execution created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution_id, status]
+                properties:
+                  execution_id:
+                    type: integer
+                  status:
+                    type: string
+                    enum: [success, pending, error]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plan/{id}/execution/{executionId}:
+    get:
+      summary: Get an execution result
+      description: |
+        Returns the execution result.
+
+        - `success` / `error`: returns the stored result immediately without re-running.
+        - `pending`: attempts to re-run. If the plan is ready and fully augmented, transitions to `success`. If augmentation is still incomplete, stays `pending`. If the plan is not yet ready, returns `pending` with `output: null`.
+      parameters:
+        - $ref: '#/components/parameters/planId'
+        - $ref: '#/components/parameters/executionId'
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [input, status, stats_time_ms, output]
+                properties:
+                  input:
+                    type: object
+                    description: The original interpreter input used for this execution.
+                  status:
+                    type: string
+                    enum: [success, pending, error]
+                  stats_time_ms:
+                    type: integer
+                    nullable: true
+                    description: Wall-clock execution time in milliseconds. Null when the plan was not yet ready.
+                  output:
+                    nullable: true
+                    allOf:
+                      - $ref: '#/components/schemas/ExecutionOutput'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Delete an execution
+      parameters:
+        - $ref: '#/components/parameters/planId'
+        - $ref: '#/components/parameters/executionId'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted:
+                    type: boolean
+                    example: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plan-and-execute:
+    post:
+      summary: Create a plan and reserve an execution slot
+      description: |
+        Enqueues a new research plan and immediately creates an execution record in `pending` state.
+
+        The execution will be computed the first time `GET /plan/{id}/execution/{executionId}` is called after the worker finishes processing the plan.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, kind, context, userId, input]
+              properties:
+                question:
+                  type: string
+                kind:
+                  type: string
+                  enum: [linear, decision-tree, auto]
+                context:
+                  type: string
+                userId:
+                  type: string
+                input:
+                  type: object
+                  description: Interpreter input to use when the execution runs.
+      responses:
+        '201':
+          description: Plan enqueued and execution slot reserved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plan_id, execution_id]
+                properties:
+                  plan_id:
+                    type: integer
+                  execution_id:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ── Shared response / parameter components ─────────────────────────────────
+
+components:
+  parameters:
+    planId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+    executionId:
+      name: executionId
+      in: path
+      required: true
+      schema:
+        type: integer
+
+  responses:
+    Unauthorized:
+      description: Missing or malformed Authorization header
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Token not found in any workspace
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found or belongs to a different workspace
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
